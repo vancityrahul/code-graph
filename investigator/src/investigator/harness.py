@@ -38,7 +38,9 @@ class AgentHarness:
         self._tracer = tracer or Tracer()
         self._agent_spec = agent_spec  # optional override; normally resolved from ctx
         self._bedrock = anthropic.AsyncAnthropicBedrock(
-            aws_region=os.getenv("AWS_REGION", "us-east-1")
+            aws_region=os.getenv("AWS_REGION", "us-east-1"),
+            aws_access_key=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
         )
 
     def _build_dispatcher(self, ctx: RunContext) -> ToolDispatcher:
@@ -211,7 +213,16 @@ class AgentHarness:
                     span.set("stop_reason", resp.stop_reason)
                     log.info("turn", agent=ctx.agent_name, turn=turn, stop=resp.stop_reason)
 
-                    messages.append({"role": "assistant", "content": resp.content})
+                    # Serialize to plain dicts — Bedrock adds extra fields (e.g. `caller`)
+                    # on response blocks that it rejects if echoed back verbatim.
+                    serialized = []
+                    for b in resp.content:
+                        t = getattr(b, "type", "")
+                        if t == "text":
+                            serialized.append({"type": "text", "text": b.text})
+                        elif t == "tool_use":
+                            serialized.append({"type": "tool_use", "id": b.id, "name": b.name, "input": b.input})
+                    messages.append({"role": "assistant", "content": serialized})
 
                     if resp.stop_reason == "end_turn":
                         text = next(

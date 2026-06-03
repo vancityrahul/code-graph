@@ -25,7 +25,7 @@ app = FastAPI(title="Code Investigator")
 _sessions: dict[str, SessionState] = {}
 _tracer = Tracer()
 
-_BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "")
+_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "")
 _BEDROCK_MEMORY_ID = os.environ.get("BEDROCK_MEMORY_ID", "")
 _MCP_SERVER_PATH = os.environ.get("MCP_SERVER_PATH", "../mcp-server-code-graph")
 _AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -128,7 +128,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 agent_name="orchestrator",
                 system_prompt=orchestrator_spec.system_prompt,
                 tools=[],
-                model=_BEDROCK_MODEL_ID,
+                model=_MODEL_ID,
                 session_id=f"{state.user_id}:{state.repo_path}",
                 max_usd=_MAX_USD,
                 max_turns=_MAX_TURNS,
