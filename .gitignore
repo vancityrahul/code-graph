@@ -1,0 +1,10 @@
+mcp-server-code-graph/.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+*.kuzu/
+*.kuzu
+*.venv
