@@ -10,15 +10,12 @@ os.environ.setdefault("AWS_REGION", "us-east-1")
 
 @pytest.fixture
 def client():
-    with patch("investigator.tools.mcp_client.MCPClient"), \
-         patch("investigator.tools.bedrock_memory.BedrockMemoryTool"), \
-         patch("investigator.harness.anthropic.AsyncAnthropicBedrock"):
-        from investigator.main import app, _sessions
-        _sessions.clear()
-        from fastapi.testclient import TestClient
-        with TestClient(app) as c:
-            yield c
-        _sessions.clear()
+    from investigator.main import app, _sessions
+    _sessions.clear()
+    from fastapi.testclient import TestClient
+    with TestClient(app) as c:
+        yield c
+    _sessions.clear()
 
 
 def test_health(client):

@@ -8,3 +8,4 @@ dist/
 *.kuzu/
 *.kuzu
 *.venv
+.env

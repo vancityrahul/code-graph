@@ -9,19 +9,19 @@ def test_tracer_noop_when_no_env(monkeypatch):
     assert tracer.enabled is False
 
 
-def test_noop_trace_context_manager(monkeypatch):
+async def test_noop_trace_context_manager(monkeypatch):
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     tracer = Tracer()
-    with tracer.trace("test-query") as t:
-        with t.span("turn", turn=0) as s:
-            s.set("model", "claude-sonnet")
+    async with tracer.trace("test-query", input="hi") as t:
+        async with t.span("turn", as_type="span") as s:
+            s.finish(metadata={"model": "claude-sonnet"})
+        t.finish(output="done", metadata={"turns": 1})
     # should not raise
 
 
-def test_noop_span_set_does_nothing(monkeypatch):
+async def test_noop_span_finish_does_nothing(monkeypatch):
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     tracer = Tracer()
-    with tracer.trace("q") as t:
-        with t.span("tool") as s:
-            s.set("tool_name", "find_symbol")
-            s.set("duration_ms", 22)
+    async with tracer.trace("q") as t:
+        async with t.span("tool", as_type="tool", input={"name": "x"}) as s:
+            s.finish(output="result")

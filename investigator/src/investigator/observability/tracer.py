@@ -1,67 +1,56 @@
 from __future__ import annotations
 import os
-from contextlib import contextmanager
-from typing import Generator
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator
 
 
 class _NoopSpan:
-    def set(self, key: str, value) -> None:
+    def finish(self, *, output: Any = None, metadata: dict | None = None) -> None:
         pass
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-
-class _NoopTrace:
-    @contextmanager
-    def span(self, name: str, **kwargs) -> Generator[_NoopSpan, None, None]:
+    @asynccontextmanager
+    async def span(self, name: str, *, as_type: str = "span", input: Any = None) -> AsyncGenerator["_NoopSpan", None]:
         yield _NoopSpan()
 
-    def __enter__(self):
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *args):
+    async def __aexit__(self, *args):
         pass
 
 
 class _LangfuseSpan:
-    """Wraps a langfuse v4 span context; metadata stored via update_current_span."""
-
-    def __init__(self, client, span):
-        self._client = client
-        self._span = span
-
-    def set(self, key: str, value) -> None:
-        try:
-            self._client.update_current_span(metadata={key: str(value)})
-        except Exception:
-            pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        pass
-
-
-class _LangfuseTrace:
     def __init__(self, client):
         self._client = client
 
-    @contextmanager
-    def span(self, name: str, **kwargs) -> Generator[_LangfuseSpan, None, None]:
-        metadata = {k: str(v) for k, v in kwargs.items()} if kwargs else None
-        with self._client.start_as_current_observation(name=name, metadata=metadata) as s:
-            yield _LangfuseSpan(self._client, s)
+    def finish(self, *, output: Any = None, metadata: dict | None = None) -> None:
+        try:
+            self._client.update_current_span(output=output, metadata=metadata or {})
+        except Exception:
+            pass
 
-    def __enter__(self):
+    @asynccontextmanager
+    async def span(self, name: str, *, as_type: str = "span", input: Any = None) -> AsyncGenerator["_LangfuseSpan", None]:
+        try:
+            with self._client.start_as_current_observation(name=name, as_type=as_type, input=input):
+                yield _LangfuseSpan(self._client)
+        except Exception:
+            yield _NoopSpan()  # type: ignore[misc]
+
+    async def __aenter__(self):
         return self
 
-    def __exit__(self, *args):
+    async def __aexit__(self, *args):
         pass
+
+
+class _LangfuseTrace(_LangfuseSpan):
+    def finish(self, *, output: Any = None, metadata: dict | None = None) -> None:
+        try:
+            self._client.update_current_span(output=output, metadata=metadata or {})
+            self._client.set_current_trace_io(output=output)
+        except Exception:
+            pass
 
 
 class Tracer:
@@ -79,11 +68,16 @@ class Tracer:
             self._client = None
             self.enabled = False
 
-    @contextmanager
-    def trace(self, name: str, **kwargs) -> Generator[_NoopTrace | _LangfuseTrace, None, None]:
+    @asynccontextmanager
+    async def trace(self, name: str, input: Any = None, **kwargs) -> AsyncGenerator[_NoopSpan | _LangfuseTrace, None]:
         if self._client:
             metadata = {k: str(v) for k, v in kwargs.items()} if kwargs else None
-            with self._client.start_as_current_observation(name=name, as_type="span", metadata=metadata):
+            with self._client.start_as_current_observation(
+                name=name,
+                as_type="agent",
+                input=input,
+                metadata=metadata,
+            ):
                 yield _LangfuseTrace(self._client)
         else:
-            yield _NoopTrace()
+            yield _NoopSpan()

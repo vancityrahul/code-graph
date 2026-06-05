@@ -3,7 +3,6 @@ name = "investigator"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic[bedrock]>=0.44.0",
     "boto3>=1.35.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -11,6 +10,7 @@ dependencies = [
     "structlog>=24.0.0",
     "python-dotenv>=1.0.0",
     "websockets>=13.0",
+    "claude-agent-sdk>=0.2.91",
 ]
 
 [project.optional-dependencies]

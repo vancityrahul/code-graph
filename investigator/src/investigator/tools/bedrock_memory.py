@@ -1,63 +1,132 @@
 from __future__ import annotations
+import re
 import time
+from datetime import datetime, timezone
+
 import boto3
+from botocore.exceptions import ClientError
+
 from investigator.result import ToolResult
+
+
+def _safe_session_id(value: str) -> str:
+    """Sanitize to match AWS sessionId pattern: [a-zA-Z0-9][a-zA-Z0-9-_]*"""
+    sanitized = re.sub(r"[^a-zA-Z0-9\-_]", "-", value)
+    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+    if not sanitized or not sanitized[0].isalnum():
+        sanitized = "s-" + sanitized
+    return sanitized[:128]
 
 
 class BedrockMemoryTool:
     """
-    Wraps Bedrock Agent Core Memory Store.
+    Wraps Bedrock AgentCore Memory (data plane).
 
-    IMPORTANT: The exact boto3 method names below (retrieve_memory, create_memory_record)
-    must be verified against the AWS Bedrock Agent Core docs before using with real AWS:
-    https://docs.aws.amazon.com/bedrock/latest/userguide/agent-core-memory.html
+    Client: bedrock-agentcore
+    Write:  create_event   — stores conversation findings as an event
+    Read:   retrieve_memory_records — semantic search over stored events
 
-    The boto3 service name may be 'bedrock-agentcore' rather than 'bedrock-agent-runtime'.
-    Update _client_name, _save_method, and _search_method as needed.
+    Namespace convention: /{user_id}/  (prefix covers all strategies)
     """
-
-    _client_name = "bedrock-agent-runtime"
-    _save_method = "create_memory_record"     # verify against AWS docs
-    _search_method = "retrieve_memory"         # verify against AWS docs
 
     def __init__(self, memory_id: str, region: str):
         self._memory_id = memory_id
-        self._client = boto3.client(self._client_name, region_name=region)
+        self._region = region
+        self._client = boto3.client("bedrock-agentcore", region_name=region)
 
+    # ------------------------------------------------------------------
+    # Save: write a finding / session summary as a memory event
+    # ------------------------------------------------------------------
     def save(self, user_id: str, repo_path: str, content: str) -> ToolResult:
+        if not self._memory_id:
+            return ToolResult.error("BEDROCK_MEMORY_ID not set", error_code="MEMORY_CONFIG_ERROR")
         t0 = time.monotonic()
-        namespace = f"{user_id}::{repo_path}"
         try:
-            method = getattr(self._client, self._save_method)
-            method(
+            self._client.create_event(
                 memoryId=self._memory_id,
-                namespace=namespace,
-                content={"text": content},
+                actorId=user_id,
+                sessionId=_safe_session_id(repo_path or "default"),
+                eventTimestamp=datetime.now(timezone.utc),
+                payload=[
+                    {
+                        "conversational": {
+                            "content": {"text": content},
+                            "role": "ASSISTANT",
+                        }
+                    }
+                ],
             )
             ms = int((time.monotonic() - t0) * 1000)
             return ToolResult.ok(data="saved", duration_ms=ms)
+        except ClientError as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            return ToolResult.error(str(e), error_code="MEMORY_ERROR", duration_ms=ms)
         except Exception as e:
             ms = int((time.monotonic() - t0) * 1000)
             return ToolResult.error(str(e), error_code="MEMORY_ERROR", duration_ms=ms)
 
+    # ------------------------------------------------------------------
+    # Search: semantic retrieval over stored memory records
+    # ------------------------------------------------------------------
     def search(self, user_id: str, repo_path: str, query: str) -> ToolResult:
+        if not self._memory_id:
+            return ToolResult.error("BEDROCK_MEMORY_ID not set", error_code="MEMORY_CONFIG_ERROR")
         t0 = time.monotonic()
-        namespace = f"{user_id}::{repo_path}"
         try:
-            method = getattr(self._client, self._search_method)
-            resp = method(
+            resp = self._client.retrieve_memory_records(
                 memoryId=self._memory_id,
-                namespace=namespace,
-                query={"text": query},
+                namespace=f"/{user_id}/",
+                searchCriteria={
+                    "searchQuery": query,
+                    "topK": 5,
+                },
             )
-            items = resp.get("memoryContents", [])
-            texts = [i.get("content", {}).get("text", "") for i in items]
+            items = resp.get("memoryRecordSummaries", [])
+            texts = [i.get("content", {}).get("text", "") for i in items if i.get("content", {}).get("text")]
             ms = int((time.monotonic() - t0) * 1000)
-            return ToolResult.ok(data="\n---\n".join(texts), duration_ms=ms)
+            return ToolResult.ok(data="\n---\n".join(texts) if texts else "No prior findings.", duration_ms=ms)
+        except ClientError as e:
+            ms = int((time.monotonic() - t0) * 1000)
+            return ToolResult.error(str(e), error_code="MEMORY_ERROR", duration_ms=ms)
         except Exception as e:
             ms = int((time.monotonic() - t0) * 1000)
             return ToolResult.error(str(e), error_code="MEMORY_ERROR", duration_ms=ms)
 
+    # ------------------------------------------------------------------
+    # Session persistence: store / reload session state via memory events
+    # ------------------------------------------------------------------
+    def save_session(self, session_id: str, user_id: str, repo_path: str) -> ToolResult:
+        """Persist session metadata so it can survive server restarts."""
+        if not self._memory_id:
+            return ToolResult.ok(data="noop")
+        try:
+            self._client.create_event(
+                memoryId=self._memory_id,
+                actorId=user_id,
+                sessionId=_safe_session_id(f"session-{session_id}"),
+                eventTimestamp=datetime.now(timezone.utc),
+                payload=[
+                    {
+                        "conversational": {
+                            "content": {"text": f"session_id={session_id} repo_path={repo_path}"},
+                            "role": "ASSISTANT",
+                        }
+                    }
+                ],
+                metadata={
+                    "session_id": {"stringValue": session_id},
+                    "repo_path": {"stringValue": repo_path},
+                    "user_id": {"stringValue": user_id},
+                    "type": {"stringValue": "session_meta"},
+                },
+            )
+            return ToolResult.ok(data="session persisted")
+        except Exception as e:
+            return ToolResult.error(str(e), error_code="MEMORY_ERROR")
+
+    # ------------------------------------------------------------------
+    # Tool schemas exposed to the orchestrator
+    # ------------------------------------------------------------------
     def tool_schemas(self) -> list[dict]:
         return [
             {

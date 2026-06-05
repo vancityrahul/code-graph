@@ -32,6 +32,7 @@ class RunContext:
     cost_usd: float = 0.0
     turn_count: int = 0
     websocket: Any | None = None   # only set on orchestrator, None for sub-agents
+    resume_id: str | None = None   # Agent SDK session id to resume a prior conversation
 
     def is_over_budget(self) -> bool:
         return self.cost_usd >= self.max_usd
@@ -81,6 +82,6 @@ class SessionState:
     session_id: str
     repo_path: Path
     user_id: str
-    mcp_client: Any | None = None
     langfuse_trace_id: str = ""
+    sdk_session_id: str = ""   # Agent SDK conversation id, for resume across messages
     history: list[dict] = field(default_factory=list)
